@@ -14,8 +14,7 @@ struct data_t {
 };
 
 struct data_t _data = {};
-const u8 cmd[16] = {};
-const int cmd_len = 0;
+// const volatile u8 cmd[16];
 
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -62,9 +61,9 @@ int BPF_URETPROBE(ifunc_trace, int size) {
   t.uid = bpf_get_current_uid_gid();
 
   bpf_get_current_comm(t.comm, sizeof(t.comm));
-  if (__builtin_memcmp(t.comm, (void *)cmd, __builtin_strlen((void *)cmd))) {
-    return 0;
-  };
+  // if (__builtin_memcmp(t.comm, (void *)cmd, __builtin_strlen((void *)cmd))) {
+  //   return 0;
+  // };
 
   char *s = (void *)PT_REGS_PARM1(ctx);
   t.size = size;

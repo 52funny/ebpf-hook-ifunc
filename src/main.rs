@@ -6,6 +6,7 @@ use libbpf_rs::skel::{OpenSkel, SkelBuilder};
 use libbpf_rs::{PerfBufferBuilder, RingBufferBuilder};
 use object::{Object, ObjectSymbol};
 use plain::Plain;
+use std::env::args;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,7 +19,7 @@ use ifunc::*;
 
 const GLIBC: &str = "/lib/libc.so.6";
 const FUNC_NAME: &str = "strlen";
-const COMM: &str = "a.out";
+const DEFAULT_COMM: &str = "a.out";
 
 type Data = ifunc_bss_types::data_t;
 unsafe impl Plain for Data {}
@@ -29,13 +30,15 @@ lazy_static! {
 }
 
 fn main() -> Result<()> {
-    let mut cmd = [0u8; 16];
-    cmd[..COMM.len()].copy_from_slice(COMM.as_bytes());
-
+    let args = args();
+    let comm = if args.len() > 1 {
+        args.into_iter().nth(1).unwrap()
+    } else {
+        DEFAULT_COMM.to_string()
+    };
     bump_memlock_rlimit()?;
     let skel_builder = IfuncSkelBuilder::default();
-    let mut skel = skel_builder.open()?;
-    skel.rodata().cmd = cmd;
+    let skel = skel_builder.open()?;
     let mut skel = skel.load()?;
 
     let func_offset = get_func_address(GLIBC, FUNC_NAME)?;
@@ -87,7 +90,12 @@ fn main() -> Result<()> {
 
     let maps = skel.maps();
     let mut rb = RingBufferBuilder::default();
-    rb.add(maps.rb(), handle)?;
+    rb.add(maps.rb(), |data| {
+        let mut da = Data::default();
+        da.copy_from_bytes(data).unwrap();
+        handle(&da, &comm);
+        0
+    })?;
     let rb = rb.build()?;
 
     let r = running.clone();
@@ -97,7 +105,7 @@ fn main() -> Result<()> {
 
     println!("{:<6} {:<6} {:<12} {:<3} STR", "PID", "UID", "COMM", "LEN");
     while running.load(Ordering::SeqCst) {
-        rb.poll(Duration::from_millis(100))?;
+        let _ = rb.poll(Duration::from_millis(100));
     }
     Ok(())
 }
@@ -118,28 +126,25 @@ fn get_impl_addr(_cpu: i32, data: &[u8]) {
     *IMPL_ADDR.write().unwrap() = addr;
 }
 
-fn handle(data: &[u8]) -> i32 {
-    let mut da = Data::default();
-    da.copy_from_bytes(data).unwrap();
-    let comm = CStr::from_bytes_until_nul(&da.comm[..])
+fn handle(data: &Data, cmd: &str) -> i32 {
+    let comm = CStr::from_bytes_until_nul(&data.comm[..])
         .unwrap()
         .to_str()
         .unwrap();
-
-    if comm != COMM {
+    if comm != cmd {
         return 0;
     }
 
     println!(
         "{:<6} {:<6} {:<12} {:<3} {}",
-        da.pid,
-        da.uid,
+        data.pid,
+        data.uid,
         comm,
-        da.size,
-        if da.size > da.str.len() as i32 {
+        data.size,
+        if data.size > data.str.len() as i32 {
             "OUT RANGE".red().to_string()
         } else {
-            String::from_utf8_lossy(&da.str[..da.size as usize]).to_string()
+            String::from_utf8_lossy(&data.str[..data.size as usize]).to_string()
         }
     );
     0
